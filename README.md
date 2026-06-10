@@ -1,6 +1,11 @@
 # bapp1
-
-randevularım kısmı yok.dükkanım kısmındaki yeni hizmet eklenebilir.olan hizmetler düzenlenip silinebilir.çalışma saatleri açık olduğu günler , çalışma saatleri,randevu aralığı ayarlanabilir.profilde dükkan adı isim adres düzenlenebilir. alt kısımda hizmetler ve çalışma saatleri iki bölme halinde görünüyor problemsiz çalışıyor.ara mesaj at yol tarifi nutonları aktif değil.foto yükleme aktif değil
+berber kısmı:
+randevularım kısmı dolu değil.dükkanım kısmındaki yeni hizmet eklenebilir.olan hizmetler düzenlenip silinebilir.çalışma saatleri açık olduğu günler , çalışma saatleri,randevu aralığı ayarlanabilir.profilde dükkan adı isim adres düzenlenebilir. alt kısımda hizmetler ve çalışma saatleri iki bölme halinde görünüyor problemsiz çalışıyor.ara mesaj at yol tarifi nutonları aktif değil.foto yükleme aktif değil.
+müşteri kısmı:
+anasayfa dolu değil,
+berber arama yapılabiliyor.aranan berberler kart halinde sıralanıyor.karta tıklanıca o berberin profiline gidliyor.berber profilindeki tüm bilgiler doğru görünüyor.
+mesaj at  butonuna tıklandığında chat ekranına gidiyor ve problemsiz şekilde mesajlaşılıyor.randevu al butonuna tıklandığında randevu alma ekranına gidiyor ama
+randevu alma işleminde eksikler var.
 
 ## Getting Started
 
