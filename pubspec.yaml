@@ -39,7 +39,8 @@ dependencies:
   firebase_auth: ^5.7.0
   
   # 🔥 YENİ EKLENEN BAĞIMLILIKLAR (Profil fotoğrafı ve tarih formatlama için)
-  image_picker: ^1.0.0        # Galeri/kameradan fotoğraf seçmek için
+  image_picker: ^1.0.0
+  firebase_storage: ^12.0.0        # Galeri/kameradan fotoğraf seçmek için
   intl: ^0.19.0               # Tarih formatlama için (Türkçe destekli)
 
 dev_dependencies:
