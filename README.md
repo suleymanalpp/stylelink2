@@ -7,6 +7,12 @@ berber arama yapılabiliyor.aranan berberler kart halinde sıralanıyor.karta t�
 mesaj at  butonuna tıklandığında chat ekranına gidiyor ve problemsiz şekilde mesajlaşılıyor.randevu al butonuna tıklandığında randevu alma ekranına gidiyor ama
 randevu alma işleminde eksikler var.
 
+
+
+
+son versiyonda filtre hariç herşey var
+
+
 ## Getting Started
 
 This project is a starting point for a Flutter application.
