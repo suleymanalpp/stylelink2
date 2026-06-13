@@ -11,6 +11,7 @@ class WorkingHours {
   final String openTime;
   final String closeTime;
   final int slotDurationMinutes;
+  final int breakBetweenSlotsMinutes;
   final Map<String, bool> dayStatus;
 
   WorkingHours({
@@ -19,6 +20,7 @@ class WorkingHours {
     required this.openTime,
     required this.closeTime,
     required this.slotDurationMinutes,
+    required this.breakBetweenSlotsMinutes,
     required this.dayStatus,
   });
 
@@ -29,6 +31,7 @@ class WorkingHours {
       openTime: map['openTime'] ?? '09:00',
       closeTime: map['closeTime'] ?? '20:00',
       slotDurationMinutes: map['slotDurationMinutes'] ?? 30,
+      breakBetweenSlotsMinutes: map['breakBetweenSlotsMinutes'] ?? 0,
       dayStatus: Map<String, bool>.from(map['dayStatus'] ?? {
         '1': true, '2': true, '3': true, '4': true, '5': true, '6': true, '7': false,
       }),
@@ -41,6 +44,7 @@ class WorkingHours {
       'openTime': openTime,
       'closeTime': closeTime,
       'slotDurationMinutes': slotDurationMinutes,
+      'breakBetweenSlotsMinutes': breakBetweenSlotsMinutes,
       'dayStatus': dayStatus,
     };
   }
@@ -91,12 +95,10 @@ class BarberService {
 class FirestoreService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  // Kullanıcı bilgisi getir
   Future<DocumentSnapshot> getUserById(String uid) async {
     return await _firestore.collection('users').doc(uid).get();
   }
 
-  // Hizmetleri dinle
   Stream<QuerySnapshot> streamServicesForBarber(String barberId) {
     return _firestore
         .collection('services')
@@ -104,22 +106,18 @@ class FirestoreService {
         .snapshots();
   }
 
-  // Hizmet ekle
   Future<void> addService(BarberService service) async {
     await _firestore.collection('services').doc(service.id).set(service.toMap());
   }
 
-  // Hizmet güncelle
   Future<void> updateService(BarberService service) async {
     await _firestore.collection('services').doc(service.id).update(service.toMap());
   }
 
-  // Hizmet sil
   Future<void> deleteService(String serviceId) async {
     await _firestore.collection('services').doc(serviceId).delete();
   }
 
-  // Çalışma saatlerini getir
   Future<DocumentSnapshot?> getWorkingHours(String barberId) async {
     final query = await _firestore
         .collection('workingHours')
@@ -132,12 +130,33 @@ class FirestoreService {
     return null;
   }
 
-  // 🔥 DÜZELTİLDİ: Çalışma saatlerini kaydet (varsa güncelle, yoksa ekle)
   Future<void> saveWorkingHours(WorkingHours workingHours) async {
     await _firestore.collection('workingHours').doc(workingHours.id).set(
       workingHours.toMap(),
       SetOptions(merge: true),
     );
+  }
+
+  // Gelecekteki randevuları kontrol et
+  Future<List<QueryDocumentSnapshot>> getFutureAppointments(String barberId) async {
+    final now = DateTime.now().toIso8601String();
+    final snapshot = await _firestore
+        .collection('appointments')
+        .where('barberId', isEqualTo: barberId)
+        .where('dateTime', isGreaterThanOrEqualTo: now)
+        .where('status', isNotEqualTo: 'canceled')
+        .get();
+    return snapshot.docs;
+  }
+
+  // 🔥 RANDEVU SÜRESİNİ GETİR
+  Future<int> getSlotDuration(String barberId) async {
+    final workingHoursDoc = await getWorkingHours(barberId);
+    if (workingHoursDoc != null && workingHoursDoc.exists) {
+      final data = workingHoursDoc.data() as Map<String, dynamic>;
+      return data['slotDurationMinutes'] ?? 30;
+    }
+    return 30;
   }
 }
 
@@ -166,6 +185,7 @@ class _MyShopScreenState extends State<MyShopScreen> with SingleTickerProviderSt
   TimeOfDay _openTime = const TimeOfDay(hour: 9, minute: 0);
   TimeOfDay _closeTime = const TimeOfDay(hour: 20, minute: 0);
   int _slotDuration = 30;
+  int _breakBetweenSlots = 0;
   bool _isLoadingHours = true;
   
   // State
@@ -189,7 +209,6 @@ class _MyShopScreenState extends State<MyShopScreen> with SingleTickerProviderSt
     super.dispose();
   }
 
-  // ÇALIŞMA SAATLERİNİ YÜKLE
   Future<void> _loadWorkingHours() async {
     setState(() => _isLoadingHours = true);
     
@@ -205,6 +224,7 @@ class _MyShopScreenState extends State<MyShopScreen> with SingleTickerProviderSt
           _openTime = _parseTimeOfDay(data['openTime'] ?? '09:00');
           _closeTime = _parseTimeOfDay(data['closeTime'] ?? '20:00');
           _slotDuration = data['slotDurationMinutes'] ?? 30;
+          _breakBetweenSlots = data['breakBetweenSlotsMinutes'] ?? 0;
           _isLoadingHours = false;
         });
       } else {
@@ -229,7 +249,7 @@ class _MyShopScreenState extends State<MyShopScreen> with SingleTickerProviderSt
     return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
   }
 
-  // HİZMET EKLE/GÜNCELLE DİYALOĞU
+  // 🔥 HİZMET EKLE/GÜNCELLE DİYALOĞU (Hizmet süresi kontrolü ile)
   void _showServiceDialog({String? serviceId, String? name, String? description, double? price, int? duration}) {
     _editingServiceId = serviceId;
     _serviceNameController.text = name ?? '';
@@ -297,7 +317,7 @@ class _MyShopScreenState extends State<MyShopScreen> with SingleTickerProviderSt
             child: const Text('İptal', style: TextStyle(color: Colors.grey)),
           ),
           ElevatedButton(
-            onPressed: _saveService,
+            onPressed: () => _saveService(),
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFD4AF37)),
             child: Text(serviceId == null ? 'Ekle' : 'Güncelle', style: const TextStyle(color: Colors.black)),
           ),
@@ -306,9 +326,18 @@ class _MyShopScreenState extends State<MyShopScreen> with SingleTickerProviderSt
     );
   }
 
+  // 🔥 HİZMET KAYDETME (Hizmet süresi kontrolü ile)
   Future<void> _saveService() async {
     if (_serviceNameController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Hizmet adı giriniz')));
+      return;
+    }
+
+    final int serviceDuration = int.tryParse(_serviceDurationController.text) ?? 30;
+    
+    // 🔥 HİZMET SÜRESİ KONTROLÜ
+    if (serviceDuration > _slotDuration) {
+      _showWarningDialogForService();
       return;
     }
 
@@ -320,7 +349,7 @@ class _MyShopScreenState extends State<MyShopScreen> with SingleTickerProviderSt
       name: _serviceNameController.text.trim(),
       description: _serviceDescriptionController.text.trim(),
       price: double.tryParse(_servicePriceController.text) ?? 0,
-      durationMinutes: int.tryParse(_serviceDurationController.text) ?? 30,
+      durationMinutes: serviceDuration,
     );
 
     if (_editingServiceId == null) {
@@ -339,6 +368,30 @@ class _MyShopScreenState extends State<MyShopScreen> with SingleTickerProviderSt
         SnackBar(content: Text(_editingServiceId == null ? 'Hizmet eklendi' : 'Hizmet güncellendi')),
       );
     }
+  }
+
+  // 🔥 HİZMET SÜRESİ UYARI DİYALOĞU
+  void _showWarningDialogForService() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Uyarı!', style: TextStyle(color: Colors.orange)),
+        content: Text(
+          'Hizmet süresi (${_serviceDurationController.text} dk), '
+          'randevu süresinden ($_slotDuration dk) daha uzun olamaz.\n\n'
+          'Lütfen hizmet süresini $_slotDuration dk veya daha kısa girin.',
+          style: const TextStyle(color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFF1C1C1C),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFD4AF37)),
+            child: const Text('Tamam', style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _deleteService(String serviceId) async {
@@ -370,20 +423,28 @@ class _MyShopScreenState extends State<MyShopScreen> with SingleTickerProviderSt
     );
   }
 
-  // 🔥 DÜZELTİLDİ: Çalışma saatlerini kaydet (mevcut ID'yi koru)
+  // Çalışma saatlerini kaydet
   Future<void> _saveWorkingHours() async {
     setState(() => _isLoading = true);
     
     try {
-      // Mevcut çalışma saatlerini kontrol et
+      // Gelecekteki randevuları kontrol et
+      final futureAppointments = await _firestoreService.getFutureAppointments(currentBarberId!);
+      
+      if (futureAppointments.isNotEmpty) {
+        final shouldContinue = await _showWarningDialog(futureAppointments.length);
+        if (!shouldContinue) {
+          setState(() => _isLoading = false);
+          return;
+        }
+      }
+      
       final existingDoc = await _firestoreService.getWorkingHours(currentBarberId!);
       
       String docId;
       if (existingDoc != null && existingDoc.exists) {
-        // VARSA AYNI ID'Yİ KULLAN (GÜNCELLE)
         docId = existingDoc.id;
       } else {
-        // YOKSA YENİ ID OLUŞTUR
         docId = DateTime.now().millisecondsSinceEpoch.toString();
       }
       
@@ -393,6 +454,7 @@ class _MyShopScreenState extends State<MyShopScreen> with SingleTickerProviderSt
         openTime: _formatTimeOfDay(_openTime),
         closeTime: _formatTimeOfDay(_closeTime),
         slotDurationMinutes: _slotDuration,
+        breakBetweenSlotsMinutes: _breakBetweenSlots,
         dayStatus: _dayStatus,
       );
       
@@ -412,6 +474,34 @@ class _MyShopScreenState extends State<MyShopScreen> with SingleTickerProviderSt
         );
       }
     }
+  }
+
+  Future<bool> _showWarningDialog(int appointmentCount) async {
+    return await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Uyarı!', style: TextStyle(color: Colors.orange)),
+        content: Text(
+          'Gelecekte $appointmentCount adet randevunuz bulunuyor.\n\n'
+          'Çalışma saatlerini değiştirirseniz, mevcut randevularınız '
+          'yeni saatlerle uyuşmayabilir.\n\n'
+          'Yine de devam etmek istiyor musunuz?',
+          style: const TextStyle(color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFF1C1C1C),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Vazgeç', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFD4AF37)),
+            child: const Text('Devam Et', style: TextStyle(color: Colors.black)),
+          ),
+        ],
+      ),
+    ) ?? false;
   }
 
   Future<void> _selectTime(String type) async {
@@ -624,7 +714,7 @@ class _MyShopScreenState extends State<MyShopScreen> with SingleTickerProviderSt
           ),
           const SizedBox(height: 20),
           
-          const Text('Randevu Aralığı (dakika)', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text('Randevu Süresi (dakika)', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           Row(
             children: [
@@ -654,6 +744,65 @@ class _MyShopScreenState extends State<MyShopScreen> with SingleTickerProviderSt
             ],
           ),
           
+          const SizedBox(height: 20),
+          
+          const Text('Randevular Arası Boşluk (dakika)', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: Slider(
+                  value: _breakBetweenSlots.toDouble(),
+                  min: 0,
+                  max: 60,
+                  divisions: 12,
+                  label: '$_breakBetweenSlots dk',
+                  onChanged: (value) {
+                    setState(() {
+                      _breakBetweenSlots = value.toInt();
+                    });
+                  },
+                  activeColor: const Color(0xFFD4AF37),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1C1C1C),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text('$_breakBetweenSlots dk', style: const TextStyle(color: Color(0xFFD4AF37))),
+              ),
+            ],
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // 🔥 BİLGİ KUTUSU
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.blue.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.blue.withOpacity(0.3)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.info_outline, color: Colors.blue),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Örnek: Randevu süresi 30 dk, boşluk 10 dk ise:\n'
+                    '09:00 - 09:30 arası randevu,\n'
+                    'Bir sonraki randevu 09:40\'ta başlar.\n\n'
+                    '⚠️ Hizmet süresi, randevu süresinden uzun olamaz!',
+                    style: const TextStyle(color: Colors.blue, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
           const SizedBox(height: 32),
           
           SizedBox(
@@ -672,27 +821,6 @@ class _MyShopScreenState extends State<MyShopScreen> with SingleTickerProviderSt
           ),
           
           const SizedBox(height: 20),
-          
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.orange.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.info_outline, color: Colors.orange),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Not: Çalışma saatlerinde yapacağınız değişiklikler, mevcut randevuları etkilememesi için en ileri tarihteki randevudan sonraki günler için geçerli olacaktır.',
-                    style: TextStyle(color: Colors.orange, fontSize: 12),
-                  ),
-                ),
-              ],
-            ),
-          ),
         ],
       ),
     );

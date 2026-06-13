@@ -140,14 +140,15 @@ class _SearchBarberScreenState extends State<SearchBarberScreen> {
   }
 
   Future<void> _loadBarbers() async {
-    setState(() => _isLoading = true);
-    final barbers = await _searchService.getAllBarbers();
-    setState(() {
-      _barbers = barbers;
-      _filteredBarbers = barbers;
-      _isLoading = false;
-    });
-  }
+  setState(() => _isLoading = true);
+  final barbers = await _searchService.getAllBarbers();
+  setState(() {
+    _barbers = barbers;
+    // Başlangıçta avgRating'e göre sırala
+    _filteredBarbers = _searchService.sortByRating(barbers);
+    _isLoading = false;
+  });
+}
 
   void _searchBarbers(String query) {
     setState(() {

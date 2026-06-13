@@ -17,7 +17,7 @@ class _CustomerMainNavigationState extends State<CustomerMainNavigation> {
     MainPageScreen(),
     SearchBarberScreen(),
     MyAppointments(),
-    CustomerProfileScreen(),
+    CustomerProfileScreen(customerId: '',),
   ];
 
   @override

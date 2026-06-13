@@ -62,7 +62,7 @@ class AppointmentFirebaseService {
   }
 
   // Belirli bir gündeki dolu randevu saatlerini getir
-  Future<List<String>> getBookedSlots(String barberId, DateTime date) async {
+  Future<List<DateTime>> getBookedAppointments(String barberId, DateTime date) async {
     final startOfDay = DateTime(date.year, date.month, date.day);
     final endOfDay = startOfDay.add(const Duration(days: 1));
     
@@ -75,8 +75,7 @@ class AppointmentFirebaseService {
         .get();
     
     return snapshot.docs.map((doc) {
-      final dateTime = DateTime.parse(doc.data()['dateTime']);
-      return '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
+      return DateTime.parse(doc.data()['dateTime']);
     }).toList();
   }
 
@@ -91,7 +90,6 @@ class AppointmentFirebaseService {
   }) async {
     final appointmentId = DateTime.now().millisecondsSinceEpoch.toString();
     
-    // Müşteri bilgilerini al
     final customerDoc = await _firestore.collection('users').doc(customerId).get();
     final customerName = customerDoc.data()?['nameSurname'] ?? 'Müşteri';
     
@@ -136,16 +134,23 @@ class _CreateAppointmentScreenState extends State<CreateAppointmentScreen> {
   
   // Seçimler
   DateTime? _selectedDate;
-  TimeOfDay? _selectedTime;
+  DateTime? _selectedSlot;
   AppointmentService? _selectedService;
   
   // Veriler
   List<AppointmentService> _services = [];
-  List<String> _availableSlots = [];
-  List<String> _bookedSlots = [];
+  List<DateTime> _availableSlots = [];
+  List<DateTime> _bookedSlots = [];
   bool _isLoadingServices = true;
   bool _isLoadingSlots = false;
   bool _isCreating = false;
+  
+  // Çalışma saatleri bilgileri
+  String _openTime = '09:00';
+  String _closeTime = '20:00';
+  int _slotDuration = 30;
+  int _breakBetweenSlots = 0;
+  Map<String, bool> _dayStatus = {};
 
   @override
   void initState() {
@@ -153,6 +158,7 @@ class _CreateAppointmentScreenState extends State<CreateAppointmentScreen> {
     _firebaseService = AppointmentFirebaseService();
     _customerId = _firebaseService.getCurrentCustomerId();
     _loadServices();
+    _loadWorkingHoursOnly();
   }
 
   Future<void> _loadServices() async {
@@ -164,65 +170,69 @@ class _CreateAppointmentScreenState extends State<CreateAppointmentScreen> {
     });
   }
 
-  Future<void> _loadAvailableSlots() async {
-    if (_selectedDate == null) return;
-    
-    setState(() => _isLoadingSlots = true);
-    
-    // Dolu saatleri al
-    _bookedSlots = await _firebaseService.getBookedSlots(widget.barberId, _selectedDate!);
-    
-    // Çalışma saatlerini al
+  // Çalışma saatlerini yükle
+  Future<void> _loadWorkingHoursOnly() async {
     final workingHours = await _firebaseService.getWorkingHours(widget.barberId);
     
+    print('========== WORKING HOURS LOADED ==========');
+    print('Raw workingHours: $workingHours');
+    
     if (workingHours != null) {
-      final openTime = workingHours['openTime'] ?? '09:00';
-      final closeTime = workingHours['closeTime'] ?? '20:00';
-      final slotDuration = workingHours['slotDurationMinutes'] ?? 30;
+      // 🔥 TİP DÖNÜŞÜMLERİNİ KONTROL ET
+      final openTimeRaw = workingHours['openTime'] ?? '09:00';
+      final closeTimeRaw = workingHours['closeTime'] ?? '20:00';
+      final slotDurationRaw = workingHours['slotDurationMinutes'] ?? 30;
+      final breakBetweenRaw = workingHours['breakBetweenSlotsMinutes'] ?? 0;
       
-      // Müsait saatleri oluştur
-      _availableSlots = _generateTimeSlots(openTime, closeTime, slotDuration);
-      // Dolu saatleri çıkar
-      _availableSlots.removeWhere((slot) => _bookedSlots.contains(slot));
+      print('openTimeRaw: $openTimeRaw (${openTimeRaw.runtimeType})');
+      print('closeTimeRaw: $closeTimeRaw (${closeTimeRaw.runtimeType})');
+      print('slotDurationRaw: $slotDurationRaw (${slotDurationRaw.runtimeType})');
+      print('breakBetweenRaw: $breakBetweenRaw (${breakBetweenRaw.runtimeType})');
+      
+      setState(() {
+        _openTime = openTimeRaw.toString();
+        _closeTime = closeTimeRaw.toString();
+        // 🔥 int'e dönüştür (String gelebilir)
+        _slotDuration = slotDurationRaw is int ? slotDurationRaw : int.tryParse(slotDurationRaw.toString()) ?? 30;
+        _breakBetweenSlots = breakBetweenRaw is int ? breakBetweenRaw : int.tryParse(breakBetweenRaw.toString()) ?? 0;
+        _dayStatus = Map<String, bool>.from(workingHours['dayStatus'] ?? {});
+      });
+      
+      print('Parsed values:');
+      print('  _openTime: $_openTime');
+      print('  _closeTime: $_closeTime');
+      print('  _slotDuration: $_slotDuration');
+      print('  _breakBetweenSlots: $_breakBetweenSlots');
+      print('  _dayStatus: $_dayStatus');
     } else {
-      // Varsayılan saatler 09:00 - 20:00, 30 dakika aralık
-      _availableSlots = _generateTimeSlots('09:00', '20:00', 30);
-      _availableSlots.removeWhere((slot) => _bookedSlots.contains(slot));
+      print('⚠️ workingHours is NULL! Using default values.');
     }
-    
-    setState(() => _isLoadingSlots = false);
+    print('==========================================');
   }
 
-  List<String> _generateTimeSlots(String openTime, String closeTime, int intervalMinutes) {
-    final slots = <String>[];
-    
-    final openParts = openTime.split(':');
-    final closeParts = closeTime.split(':');
-    
-    int currentHour = int.parse(openParts[0]);
-    int currentMinute = int.parse(openParts[1]);
-    final endHour = int.parse(closeParts[0]);
-    final endMinute = int.parse(closeParts[1]);
-    
-    while (currentHour < endHour || (currentHour == endHour && currentMinute < endMinute)) {
-      slots.add('${currentHour.toString().padLeft(2, '0')}:${currentMinute.toString().padLeft(2, '0')}');
-      
-      currentMinute += intervalMinutes;
-      if (currentMinute >= 60) {
-        currentHour++;
-        currentMinute -= 60;
-      }
-    }
-    
-    return slots;
-  }
-
+  // 🔥 TARİH SEÇİCİ - SADECE AÇIK GÜNLER SEÇİLEBİLİR
   Future<void> _selectDate() async {
-    final date = await showDatePicker(
+    await _loadWorkingHoursOnly();
+    
+    final DateTime? selectedDate = await showDatePicker(
       context: context,
       initialDate: DateTime.now(),
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 30)),
+      selectableDayPredicate: (DateTime date) {
+        final dayKey = date.weekday.toString();
+        final isOpen = _dayStatus[dayKey] ?? false;
+        
+        final isToday = date.year == DateTime.now().year &&
+                        date.month == DateTime.now().month &&
+                        date.day == DateTime.now().day;
+        
+        if (date.isBefore(DateTime.now()) && !isToday) {
+          return false;
+        }
+        
+        return isOpen;
+      },
       builder: (context, child) => Theme(
         data: ThemeData.dark().copyWith(
           colorScheme: const ColorScheme.dark(primary: Color(0xFFD4AF37)),
@@ -231,13 +241,160 @@ class _CreateAppointmentScreenState extends State<CreateAppointmentScreen> {
       ),
     );
     
-    if (date != null) {
+    if (selectedDate != null) {
       setState(() {
-        _selectedDate = date;
-        _selectedTime = null;
+        _selectedDate = selectedDate;
+        _selectedSlot = null;
+        _availableSlots = [];
+        _bookedSlots = [];
       });
+      
       await _loadAvailableSlots();
     }
+  }
+
+  // 🔥 SLOTLARI HESAPLA
+  Future<void> _loadAvailableSlots() async {
+    if (_selectedDate == null) return;
+    
+    // 🔥 DEBUG: Firestore'dan gelen değerleri kontrol et
+    print('========== DEBUG SLOT HESAPLAMA ==========');
+    print('Seçilen tarih: ${_selectedDate}');
+    print('Haftanın günü: ${_selectedDate!.weekday}');
+    print('dayStatus: $_dayStatus');
+    print('openTime: $_openTime');
+    print('closeTime: $_closeTime');
+    print('slotDurationMinutes: $_slotDuration');
+    print('breakBetweenSlots: $_breakBetweenSlots');
+    print('==========================================');
+    
+    setState(() => _isLoadingSlots = true);
+    
+    try {
+      final dayOfWeek = _selectedDate!.weekday;
+      final dayKey = dayOfWeek.toString();
+      final isOpen = _dayStatus[dayKey] ?? false;
+      
+      print('Gün kontrolü: dayKey=$dayKey, isOpen=$isOpen');
+      
+      if (!isOpen) {
+        print('⚠️ Dükkan bu gün KAPALI!');
+        _availableSlots = [];
+        _bookedSlots = [];
+        setState(() => _isLoadingSlots = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bu gün dükkan kapalıdır.'), backgroundColor: Colors.orange),
+        );
+        return;
+      }
+      
+      // Dolu randevuları al
+      final bookedAppointments = await _firebaseService.getBookedAppointments(widget.barberId, _selectedDate!);
+      print('Dolu randevu sayısı: ${bookedAppointments.length}');
+      
+      // Tüm slotları hesapla
+      final allSlots = _generateAllSlots();
+      print('Toplam slot sayısı: ${allSlots.length}');
+      
+      // Dolu slotları belirle
+      _bookedSlots = [];
+      _availableSlots = [];
+      
+      for (var slot in allSlots) {
+        bool isBooked = false;
+        for (var booked in bookedAppointments) {
+          final bookedStart = booked;
+          final bookedEnd = booked.add(Duration(minutes: _slotDuration));
+          final slotEnd = slot.add(Duration(minutes: _slotDuration));
+          
+          if ((slot.isBefore(bookedEnd) && slotEnd.isAfter(bookedStart))) {
+            isBooked = true;
+            break;
+          }
+        }
+        
+        if (isBooked) {
+          _bookedSlots.add(slot);
+        } else {
+          _availableSlots.add(slot);
+        }
+      }
+      
+      print('Boş slot sayısı: ${_availableSlots.length}');
+      print('Dolu slot sayısı: ${_bookedSlots.length}');
+      
+    } catch (e) {
+      print('❌ Slot hesaplama hatası: $e');
+      _availableSlots = [];
+      _bookedSlots = [];
+    } finally {
+      setState(() => _isLoadingSlots = false);
+    }
+  }
+
+  // 🔥 TÜM SLOTLARI OLUŞTUR
+  List<DateTime> _generateAllSlots() {
+    print('🔧 Slot hesaplama detayları:');
+    print('  openTime: $_openTime');
+    print('  closeTime: $_closeTime');
+    print('  slotDuration: $_slotDuration');
+    print('  breakBetweenSlots: $_breakBetweenSlots');
+    
+    final slots = <DateTime>[];
+    
+    final openParts = _openTime.split(':');
+    final closeParts = _closeTime.split(':');
+    
+    if (openParts.length < 2 || closeParts.length < 2) {
+      print('❌ HATA: openTime veya closeTime formatı yanlış!');
+      print('   openParts: $openParts');
+      print('   closeParts: $closeParts');
+      return slots;
+    }
+    
+    int openHour = int.parse(openParts[0]);
+    int openMinute = int.parse(openParts[1]);
+    int closeHour = int.parse(closeParts[0]);
+    int closeMinute = int.parse(closeParts[1]);
+    
+    print('  openHour: $openHour, openMinute: $openMinute');
+    print('  closeHour: $closeHour, closeMinute: $closeMinute');
+    
+    DateTime currentSlot = DateTime(
+      _selectedDate!.year,
+      _selectedDate!.month,
+      _selectedDate!.day,
+      openHour,
+      openMinute,
+    );
+    
+    final closeTime = DateTime(
+      _selectedDate!.year,
+      _selectedDate!.month,
+      _selectedDate!.day,
+      closeHour,
+      closeMinute,
+    );
+    
+    print('  currentSlot başlangıç: $currentSlot');
+    print('  closeTime: $closeTime');
+    
+    int slotCount = 0;
+    while (currentSlot.add(Duration(minutes: _slotDuration)).isBefore(closeTime) ||
+           currentSlot.add(Duration(minutes: _slotDuration)).isAtSameMomentAs(closeTime)) {
+      
+      slots.add(currentSlot);
+      slotCount++;
+      
+      final nextSlot = currentSlot.add(Duration(minutes: _slotDuration + _breakBetweenSlots));
+      print('  Slot $slotCount: ${_formatDateTime(currentSlot)} - ${_formatDateTime(currentSlot.add(Duration(minutes: _slotDuration)))}');
+      print('    Sonraki slot başlangıcı: ${_formatDateTime(nextSlot)}');
+      
+      currentSlot = nextSlot;
+    }
+    
+    print('✅ Toplam $slotCount slot oluşturuldu.');
+    return slots;
   }
 
   Future<void> _createAppointment() async {
@@ -246,7 +403,7 @@ class _CreateAppointmentScreenState extends State<CreateAppointmentScreen> {
       return;
     }
     
-    if (_selectedTime == null) {
+    if (_selectedSlot == null) {
       _showSnackBar('Lütfen bir saat seçin', Colors.red);
       return;
     }
@@ -258,14 +415,6 @@ class _CreateAppointmentScreenState extends State<CreateAppointmentScreen> {
     
     setState(() => _isCreating = true);
     
-    final dateTime = DateTime(
-      _selectedDate!.year,
-      _selectedDate!.month,
-      _selectedDate!.day,
-      _selectedTime!.hour,
-      _selectedTime!.minute,
-    );
-    
     try {
       await _firebaseService.createAppointment(
         barberId: widget.barberId,
@@ -273,7 +422,7 @@ class _CreateAppointmentScreenState extends State<CreateAppointmentScreen> {
         serviceId: _selectedService!.id,
         serviceName: _selectedService!.name,
         price: _selectedService!.price,
-        dateTime: dateTime,
+        dateTime: _selectedSlot!,
       );
       
       _showSnackBar('Randevu talebiniz gönderildi!', Colors.green);
@@ -289,6 +438,10 @@ class _CreateAppointmentScreenState extends State<CreateAppointmentScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), backgroundColor: color),
     );
+  }
+
+  String _formatDateTime(DateTime dateTime) {
+    return '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
   }
 
   @override
@@ -345,7 +498,7 @@ class _CreateAppointmentScreenState extends State<CreateAppointmentScreen> {
               const SizedBox(height: 8),
               _isLoadingSlots
                   ? const Center(child: CircularProgressIndicator())
-                  : _availableSlots.isEmpty
+                  : _availableSlots.isEmpty && _bookedSlots.isEmpty
                       ? Container(
                           padding: const EdgeInsets.all(32),
                           decoration: BoxDecoration(
@@ -354,7 +507,7 @@ class _CreateAppointmentScreenState extends State<CreateAppointmentScreen> {
                           ),
                           child: const Center(
                             child: Text(
-                              'Bu gün için müsait saat bulunmamaktadır.',
+                              'Bu gün için randevu alınamamaktadır.',
                               style: TextStyle(color: Colors.grey),
                             ),
                           ),
@@ -362,28 +515,34 @@ class _CreateAppointmentScreenState extends State<CreateAppointmentScreen> {
                       : Wrap(
                           spacing: 12,
                           runSpacing: 12,
-                          children: _availableSlots.map((slot) {
-                            final timeParts = slot.split(':');
-                            final isSelected = _selectedTime != null &&
-                                _selectedTime!.hour == int.parse(timeParts[0]) &&
-                                _selectedTime!.minute == int.parse(timeParts[1]);
-                            return FilterChip(
-                              label: Text(slot),
-                              selected: isSelected,
-                              onSelected: (selected) {
-                                setState(() {
-                                  _selectedTime = selected
-                                      ? TimeOfDay(hour: int.parse(timeParts[0]), minute: int.parse(timeParts[1]))
-                                      : null;
-                                });
-                              },
-                              backgroundColor: const Color(0xFF1C1C1C),
-                              selectedColor: const Color(0xFFD4AF37),
-                              labelStyle: TextStyle(
-                                color: isSelected ? Colors.black : Colors.white,
-                              ),
-                            );
-                          }).toList(),
+                          children: [
+                            ..._availableSlots.map((slot) {
+                              final isSelected = _selectedSlot == slot;
+                              return FilterChip(
+                                label: Text(_formatDateTime(slot)),
+                                selected: isSelected,
+                                onSelected: (selected) {
+                                  setState(() {
+                                    _selectedSlot = selected ? slot : null;
+                                  });
+                                },
+                                backgroundColor: const Color(0xFF1C1C1C),
+                                selectedColor: const Color(0xFF4CAF50),
+                                labelStyle: const TextStyle(color: Colors.white),
+                                avatar: const Icon(Icons.check_circle, size: 16, color: Colors.white),
+                              );
+                            }).toList(),
+                            ..._bookedSlots.map((slot) {
+                              return FilterChip(
+                                label: Text(_formatDateTime(slot)),
+                                selected: false,
+                                onSelected: null,
+                                backgroundColor: Colors.red.withOpacity(0.3),
+                                labelStyle: const TextStyle(color: Colors.grey),
+                                avatar: const Icon(Icons.cancel, size: 16, color: Colors.grey),
+                              );
+                            }).toList(),
+                          ],
                         ),
               const SizedBox(height: 20),
             ],
@@ -466,7 +625,9 @@ class _CreateAppointmentScreenState extends State<CreateAppointmentScreen> {
               width: double.infinity,
               height: 50,
               child: ElevatedButton(
-                onPressed: _isCreating ? null : _createAppointment,
+                onPressed: (_selectedDate != null && _selectedSlot != null && _selectedService != null && !_isCreating)
+                    ? _createAppointment
+                    : null,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFFD4AF37),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -479,6 +640,32 @@ class _CreateAppointmentScreenState extends State<CreateAppointmentScreen> {
                       ),
               ),
             ),
+            
+            const SizedBox(height: 16),
+            
+            // Bilgi kutusu
+            if (_selectedService != null && _selectedDate != null && _selectedSlot != null)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.info_outline, color: Colors.blue),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Seçilen hizmet: ${_selectedService!.name}\n'
+                        'Süre: ${_selectedService!.durationMinutes} dk\n'
+                        'Randevu saati: ${_formatDateTime(_selectedSlot!)}',
+                        style: const TextStyle(color: Colors.blue, fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
